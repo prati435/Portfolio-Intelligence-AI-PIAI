@@ -687,7 +687,7 @@
         <span>📅 Daily Analysis Scorecard — Intraday Move &amp; Changes Since Last Baseline</span>
         <div style="display:flex; gap:6px; align-items:center;">
           <span class="badge badge-blue" id="dash-sync-health-pill">Feed: Ready</span>
-          <button class="btn-secondary" style="padding:2px 8px; font-size:0.7rem;" onclick="saveManualDailyBaseline()" title="Snapshot current portfolio values as your baseline for comparison">📌 Pin Baseline</button>
+          <button id="btn-pin-baseline" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem; border:1px solid #38bdf8;" onclick="saveManualDailyBaseline(true)" title="Snapshot current portfolio &amp; index values as your baseline for comparison">📌 Pin Baseline</button>
         </div>
       </div>
       <div id="dash-daily-delta-summary" style="font-size: 0.78rem; color: #e2e8f0; line-height: 1.55;">
@@ -2440,27 +2440,32 @@
   /* =========================================================================
      DAILY SNAPSHOT BASELINE & DELTA SCORECARD ENGINE
      ========================================================================= */
+  let baselineJustPinnedFlash = false;
+
   function getOrInitDailyBaseline(grandCur, grandInv) {
-    if (grandCur <= 0) return null;
-    const todayKey = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
     let store = {};
     try { store = JSON.parse(localStorage.getItem(STORAGE_KEY_BASELINE) || "{}"); } catch (e) { store = {}; }
+    if (store.pinned) return store.pinned;
+    if (grandCur <= 0 && !liveBenchmarks["^NSEI"]) return null;
 
-    if (!store.pinned) {
-      store.pinned = {
-        date: todayKey,
-        time: new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }),
-        grandCur,
-        grandInv,
-        exitNames: holdings.filter(h => h.act && h.act.includes("EXIT")).map(h => h.n),
-        bookNames: holdings.filter(h => h.act && h.act.includes("BOOK")).map(h => h.n)
-      };
-      localStorage.setItem(STORAGE_KEY_BASELINE, JSON.stringify(store));
-    }
+    const todayKey = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
+    const nowTime = new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+    store.pinned = {
+      date: todayKey,
+      time: nowTime,
+      grandCur,
+      grandInv,
+      niftyLtp: liveBenchmarks["^NSEI"] ? liveBenchmarks["^NSEI"].ltp : 0,
+      sensexLtp: liveBenchmarks["^BSESN"] ? liveBenchmarks["^BSESN"].ltp : 0,
+      holdingsCount: holdings.length + mfs.length + etfs.length + bonds.length,
+      exitNames: holdings.filter(h => h.act && h.act.includes("EXIT")).map(h => h.n),
+      bookNames: holdings.filter(h => h.act && h.act.includes("BOOK")).map(h => h.n)
+    };
+    localStorage.setItem(STORAGE_KEY_BASELINE, JSON.stringify(store));
     return store.pinned;
   }
 
-  function saveManualDailyBaseline() {
+  function saveManualDailyBaseline(userClicked = true) {
     const eqInv = holdings.reduce((s, h) => s + h.inv, 0), eqCur = holdings.reduce((s, h) => s + h.cur, 0);
     const mfInv = mfs.reduce((s, m) => s + m.inv, 0), mfCur = mfs.reduce((s, m) => s + m.cur, 0);
     const etfInv = etfs.reduce((s, e) => s + e.inv, 0), etfCur = etfs.reduce((s, e) => s + e.cur, 0);
@@ -2468,17 +2473,37 @@
     const grandCur = eqCur + mfCur + etfCur + bondCur;
     const grandInv = eqInv + mfInv + etfInv + bondInv;
     const todayKey = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
-    const nowTime = new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
+    const nowTime = new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
 
     const pinned = {
       date: todayKey,
       time: nowTime,
       grandCur,
       grandInv,
+      niftyLtp: liveBenchmarks["^NSEI"] ? liveBenchmarks["^NSEI"].ltp : 0,
+      sensexLtp: liveBenchmarks["^BSESN"] ? liveBenchmarks["^BSESN"].ltp : 0,
+      holdingsCount: holdings.length + mfs.length + etfs.length + bonds.length,
       exitNames: holdings.filter(h => h.act && h.act.includes("EXIT")).map(h => h.n),
       bookNames: holdings.filter(h => h.act && h.act.includes("BOOK")).map(h => h.n)
     };
     localStorage.setItem(STORAGE_KEY_BASELINE, JSON.stringify({ pinned }));
+
+    if (userClicked) {
+      baselineJustPinnedFlash = true;
+      const btn = document.getElementById("btn-pin-baseline");
+      if (btn) {
+        btn.textContent = `✅ Pinned (${nowTime})`;
+        btn.className = "btn-emerald";
+        setTimeout(() => {
+          btn.textContent = "📌 Pin Baseline";
+          btn.className = "btn-secondary";
+        }, 3500);
+      }
+      setTimeout(() => {
+        baselineJustPinnedFlash = false;
+        runPortfolioIntelligenceEngine();
+      }, 6000);
+    }
     runPortfolioIntelligenceEngine();
   }
 
@@ -2765,13 +2790,27 @@
     // 1. Update Daily Analysis Scorecard & Delta vs Baseline
     const deltaEl = document.getElementById("dash-daily-delta-summary");
     const nData = liveBenchmarks["^NSEI"];
+    const sData = liveBenchmarks["^BSESN"];
     const vixData = liveBenchmarks["^INDIAVIX"];
     if (deltaEl) {
+      const base = getOrInitDailyBaseline(grandCur, grandInv);
+      const flashBanner = baselineJustPinnedFlash && base
+        ? `<div style="background:rgba(16,185,129,0.18); border:1px solid #34d399; color:#a7f3d0; padding:6px 10px; border-radius:6px; margin-bottom:8px; font-weight:600;">
+             ✅ Baseline Snapshot Pinned at <strong>${base.date} ${base.time} IST</strong>! (Pinned Net Worth: <strong>${fmtVal(base.grandCur || 0)}</strong>${base.niftyLtp ? ` · Pinned Nifty: <strong>${base.niftyLtp.toLocaleString("en-IN", {maximumFractionDigits:2})}</strong>` : ''}). Any future price moves will be measured against this checkpoint.
+           </div>`
+        : '';
+
       if (grandCur <= 0) {
-        deltaEl.innerHTML = `Upload your broker CSV or import from DhanHQ Free Tier to track your daily portfolio delta, intraday P&amp;L, and alpha vs Nifty 50.`;
+        const niftyDelta = (base && base.niftyLtp && nData) ? (nData.ltp - base.niftyLtp) : 0;
+        deltaEl.innerHTML = `
+          ${flashBanner}
+          • <strong>Portfolio Status:</strong> No holdings loaded yet — click <strong>📁 Upload Broker CSV</strong>, <strong>🔗 Connect DhanHQ API</strong>, or <strong>➕ Add Position</strong> to track your portfolio's Rupee Delta.<br>
+          • <strong>Pinned Market Baseline (${base ? `${base.date} ${base.time} IST` : 'Not Pinned Yet'}):</strong> ${base && base.niftyLtp && nData ? `Nifty 50 Pinned @ <strong>${base.niftyLtp.toLocaleString("en-IN", {maximumFractionDigits:2})}</strong> → Live Move Since Pin: <strong class="${niftyDelta >= 0 ? 'pos' : 'neg'}">${niftyDelta >= 0 ? '+' : ''}${niftyDelta.toFixed(2)} pts</strong>` : 'Click <strong>📌 Pin Baseline</strong> above at any time (even after market close) to lock in current closing levels as your reference checkpoint.'}
+        `;
       } else {
-        const base = getOrInitDailyBaseline(grandCur, grandInv);
         const deltaSincePin = base ? (grandCur - base.grandCur) : 0;
+        const deltaPctSincePin = (base && base.grandCur > 0) ? ((deltaSincePin / base.grandCur) * 100) : 0;
+        const niftyDelta = (base && base.niftyLtp && nData) ? (nData.ltp - base.niftyLtp) : 0;
         const niftyPct = nData ? nData.pct : 0;
         const alphaPct = todayPortPct - niftyPct;
         const curExits = holdings.filter(h => h.act.includes("EXIT")).map(h => h.n);
@@ -2780,9 +2819,10 @@
         const worstMoverToday = [...holdings].sort((a, b) => (a.dayPct || 0) - (b.dayPct || 0))[0];
 
         deltaEl.innerHTML = `
+          ${flashBanner}
           • <strong>Today's Live Intraday P&amp;L:</strong> <span class="${todayEqPnL >= 0 ? 'pos' : 'neg'}"><strong>${fmt(todayEqPnL)} (${todayPortPct >= 0 ? '+' : ''}${todayPortPct.toFixed(2)}%)</strong></span> across equities &amp; ETFs ${nData ? `vs <strong>Nifty 50 (${niftyPct >= 0 ? '+' : ''}${niftyPct.toFixed(2)}%)</strong> → Daily Alpha: <strong class="${alphaPct >= 0 ? 'pos' : 'neg'}">${alphaPct >= 0 ? '+' : ''}${alphaPct.toFixed(2)}%</strong>` : ''}.<br>
           • <strong>Today's Session Leaders &amp; Laggards:</strong> Best today: <strong>${topMoverToday ? `${topMoverToday.n} (${(topMoverToday.dayPct||0) >= 0 ? '+' : ''}${(topMoverToday.dayPct||0).toFixed(2)}%, ${fmt(topMoverToday.today||0)})` : 'N/A'}</strong> &nbsp;|&nbsp; Weakest today: <strong>${worstMoverToday ? `${worstMoverToday.n} (${(worstMoverToday.dayPct||0).toFixed(2)}%, ${fmt(worstMoverToday.today||0)})` : 'N/A'}</strong>.<br>
-          • <strong>Delta Since Pinned Baseline (${base ? `${base.date} ${base.time}` : 'Today'}):</strong> Net Worth Delta: <strong class="${deltaSincePin >= 0 ? 'pos' : 'neg'}">${fmt(deltaSincePin)}</strong> ${newExits.length ? `· 🚨 <strong>Newly entered EXIT zone:</strong> ${newExits.join(", ")}` : '· ✅ Zero new stocks entered critical exit drawdown since baseline'}.
+          • <strong>Delta Since Pinned Baseline (${base ? `${base.date} ${base.time} IST · Base: ${fmtVal(base.grandCur)}` : 'Today'}):</strong> Net Worth Delta: <strong class="${deltaSincePin >= 0 ? 'pos' : 'neg'}">${fmt(deltaSincePin)} (${deltaPctSincePin >= 0 ? '+' : ''}${deltaPctSincePin.toFixed(2)}%)</strong> ${base && base.niftyLtp && nData ? `· Nifty Delta: <strong>${niftyDelta >= 0 ? '+' : ''}${niftyDelta.toFixed(1)} pts</strong>` : ''} ${newExits.length ? `· 🚨 <strong>Newly entered EXIT zone:</strong> ${newExits.join(", ")}` : '· ✅ Zero new stocks entered critical exit drawdown since baseline'}.
         `;
       }
     }
