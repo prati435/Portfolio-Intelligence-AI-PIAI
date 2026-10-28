@@ -1697,19 +1697,31 @@
       el.innerHTML = `📅 ${istDateStr} &nbsp;·&nbsp; 🕒 ${istTimeStr} IST &nbsp;·&nbsp; ${statusBadge}`;
     }
 
-    // Handle Auto-Sync Countdown
+    // Handle Auto-Sync Countdown (with Smart Quota Saver when Market is Closed or Tab is Hidden)
     const badgeEl = document.getElementById("badge-autosync");
+    const isTabHidden = document.visibilityState === "hidden";
+    const shouldEcoPause = (!isMarketOpen && lastSyncTimestamp > 0) || isTabHidden;
+
     if (autoSyncIntervalSec > 0) {
-      autoSyncCountdown = Math.max(0, autoSyncCountdown - 1);
-      if (badgeEl) {
-        badgeEl.textContent = isSyncInProgress
-          ? `⏳ Syncing Market...`
-          : `🔄 Auto-Sync: ${autoSyncCountdown}s`;
-        badgeEl.className = "badge badge-emerald";
-      }
-      if (autoSyncCountdown <= 0 && !isSyncInProgress) {
-        autoSyncCountdown = autoSyncIntervalSec;
-        syncLiveNSEPrices(false);
+      if (shouldEcoPause && !isSyncInProgress) {
+        if (badgeEl) {
+          badgeEl.textContent = !isMarketOpen
+            ? `🌙 Eco-Paused (Market Closed · 0 req/min)`
+            : `🌙 Eco-Paused (Tab Hidden)`;
+          badgeEl.className = "badge badge-blue";
+        }
+      } else {
+        autoSyncCountdown = Math.max(0, autoSyncCountdown - 1);
+        if (badgeEl) {
+          badgeEl.textContent = isSyncInProgress
+            ? `⏳ Syncing Market...`
+            : `🔄 Auto-Sync: ${autoSyncCountdown}s`;
+          badgeEl.className = "badge badge-emerald";
+        }
+        if (autoSyncCountdown <= 0 && !isSyncInProgress) {
+          autoSyncCountdown = autoSyncIntervalSec;
+          syncLiveNSEPrices(false);
+        }
       }
     } else if (badgeEl) {
       badgeEl.textContent = `⏸️ Auto-Sync: OFF (Click to enable)`;
@@ -2027,6 +2039,33 @@
      ULTRA-ROBUST MULTI-SOURCE MARKET ENGINE (CACHE-BUSTED + ETF/MF + DELTA)
      ========================================================================= */
   const STORAGE_KEY_WORKER = "piai_cf_worker_v4";
+  const STORAGE_KEY_QUOTA = "piai_cf_quota_v4";
+  const WORKER_DAILY_SAFE_CAP = 80000; // Hard safety ceiling (80% of Cloudflare's 100,000/day free tier)
+
+  function getWorkerQuotaState() {
+    // Cloudflare resets the 100,000 free request counter daily at 00:00 UTC
+    const utcDay = new Date().toISOString().slice(0, 10);
+    let q = {};
+    try { q = JSON.parse(localStorage.getItem(STORAGE_KEY_QUOTA) || "{}"); } catch (e) { q = {}; }
+    if (q.utcDay !== utcDay) {
+      q = { utcDay, count: 0, savedByMarketClosed: 0 };
+      localStorage.setItem(STORAGE_KEY_QUOTA, JSON.stringify(q));
+    }
+    return q;
+  }
+
+  function incrementWorkerRequestCount(n = 1) {
+    const q = getWorkerQuotaState();
+    q.count = (q.count || 0) + n;
+    localStorage.setItem(STORAGE_KEY_QUOTA, JSON.stringify(q));
+    return q;
+  }
+
+  function resetWorkerQuotaCounter() {
+    const utcDay = new Date().toISOString().slice(0, 10);
+    localStorage.setItem(STORAGE_KEY_QUOTA, JSON.stringify({ utcDay, count: 0, savedByMarketClosed: 0 }));
+    updateTelemetryUI();
+  }
   const STORAGE_KEY_BASELINE = "piai_daily_baseline_v4";
   let lastSyncTelemetry = { indicesOk: 0, stocksOk: 0, etfsOk: 0, mfsOk: 0, lastRun: "Never", winningRelay: "Auto" };
 
@@ -2059,14 +2098,23 @@
       pill.textContent = ok ? `🟢 Live (${lastSyncTelemetry.lastRun})` : `🟡 Waiting for Sync`;
       pill.className = "badge " + (ok ? "badge-emerald" : "badge-amber");
     }
+    const qState = getWorkerQuotaState();
+    const pctUsed = ((qState.count / 100000) * 100).toFixed(2);
+    const reqPerSync = 7 + holdings.length + etfs.length + watchlist.length;
+    const estDailyMktHours = reqPerSync * 375; // 375 mins in 9:15-15:30 IST
+    if (pill) {
+      const ok = lastSyncTelemetry.indicesOk > 0 || lastSyncTelemetry.stocksOk > 0;
+      pill.textContent = ok ? `🟢 Live (${lastSyncTelemetry.lastRun}) · Quota: ${qState.count.toLocaleString()}/100k` : `🟡 Ready · Quota: ${qState.count.toLocaleString()}/100k`;
+      pill.className = "badge " + (ok ? "badge-emerald" : "badge-amber");
+    }
     if (box) {
       box.innerHTML = `
-        • <strong>Last Sync Time (IST):</strong> ${lastSyncTelemetry.lastRun}<br>
-        • <strong>Fastest Winning Relay:</strong> <code>${lastSyncTelemetry.winningRelay}</code><br>
-        • <strong>Benchmarks Updated:</strong> ${lastSyncTelemetry.indicesOk} / 7 indices<br>
-        • <strong>Direct Equities Updated:</strong> ${lastSyncTelemetry.stocksOk} / ${holdings.length} stocks<br>
-        • <strong>ETFs Updated (NSE/BSE):</strong> ${lastSyncTelemetry.etfsOk} / ${etfs.length} ETFs<br>
-        • <strong>Mutual Funds Updated (AMFI Official API):</strong> ${lastSyncTelemetry.mfsOk} / ${mfs.length} funds
+        • <strong>Today's Cloudflare Worker Usage (Resets 00:00 UTC / 05:30 AM IST):</strong> <strong style="color:#34d399;">${qState.count.toLocaleString()} / 100,000 requests (${pctUsed}%)</strong> — Safety Cap at ${WORKER_DAILY_SAFE_CAP.toLocaleString()}/day <button class="btn-secondary" style="padding:1px 6px; font-size:0.66rem; margin-left:6px;" onclick="resetWorkerQuotaCounter()">Reset Counter</button><br>
+        • <strong>Your Portfolio's Cost per Sync:</strong> <strong>${reqPerSync} requests/sync</strong> (7 indices + ${holdings.length} stocks + ${etfs.length} ETFs + ${watchlist.length} watchlist; MFs use 0 Worker requests via direct AMFI API)<br>
+        • <strong>Projected Full-Day Usage (60s Auto-Sync during 6.25h NSE Market Hours):</strong> <strong>~${estDailyMktHours.toLocaleString()} req/day (${((estDailyMktHours/100000)*100).toFixed(1)}% of 100k free limit)</strong><br>
+        • <strong>Auto-Pause Outside Market Hours &amp; Hidden Tabs:</strong> <strong style="color:#38bdf8;">ACTIVE</strong> (Saved ${qState.savedByMarketClosed || 0} unnecessary background syncs today)<br>
+        • <strong>Last Sync Time (IST):</strong> ${lastSyncTelemetry.lastRun} via <code>${lastSyncTelemetry.winningRelay}</code><br>
+        • <strong>Assets Updated:</strong> Indices ${lastSyncTelemetry.indicesOk}/7 · Stocks ${lastSyncTelemetry.stocksOk}/${holdings.length} · ETFs ${lastSyncTelemetry.etfsOk}/${etfs.length} · MFs ${lastSyncTelemetry.mfsOk}/${mfs.length}
       `;
     }
   }
@@ -2108,11 +2156,17 @@
     const encQ2 = encodeURIComponent(freshUrlQ2);
 
     const customWorker = (localStorage.getItem(STORAGE_KEY_WORKER) || "").trim();
-    const racers = [];
-    if (customWorker) {
+    const qState = getWorkerQuotaState();
+    if (customWorker && qState.count < WORKER_DAILY_SAFE_CAP) {
       const baseW = customWorker.includes("?url=") ? customWorker : customWorker.replace(/\/$/, "") + "/?url=";
-      racers.push(fetchOneProxy(`${baseW}${enc}`, false, "Custom Cloudflare Worker", 4000));
+      try {
+        incrementWorkerRequestCount(1);
+        return await fetchOneProxy(`${baseW}${enc}`, false, "Custom Cloudflare Worker", 3800);
+      } catch (workerErr) {
+        // Fallback to public proxy pool only if custom worker fails
+      }
     }
+    const racers = [];
     racers.push(
       fetchOneProxy(`https://corsproxy.io/?${enc}`, false, "corsproxy.io (q1)", 4200),
       fetchOneProxy(`https://api.allorigins.win/raw?url=${encQ2}`, false, "allorigins-raw (q2)", 4200),
