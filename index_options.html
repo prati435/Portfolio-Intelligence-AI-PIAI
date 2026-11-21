@@ -838,7 +838,7 @@
     <div class="global-left-brand-and-tabs">
       <span class="global-brand-heading">🎯 PIAI Options Hub</span>
       <div class="app-module-tabs" role="navigation" aria-label="PIAI Modules">
-        <button type="button" class="app-nav-tab" onclick="navigateToModule('index.html')">📊 Portfolio</button><button type="button" class="app-nav-tab" onclick="navigateToModule('index_algo.html')">🤖 Algo</button><button type="button" class="app-nav-tab active" onclick="navigateToModule('index_options.html')">🎯 Options</button><button type="button" class="app-nav-tab" onclick="navigateToModule('index_mock.html')">🧪 Mock</button><button type="button" class="app-nav-tab" id="nav-tab-admin" onclick="navigateToModule('index_admin.html')">⚙️ Admin</button>
+        <button type="button" class="app-nav-tab" onclick="navigateToModule('index.html')">📊 Portfolio</button><button type="button" class="app-nav-tab" onclick="navigateToModule('index_algo.html')">🤖 Algo</button><button type="button" class="app-nav-tab active" onclick="navigateToModule('index_options.html')">🎯 Options</button><button type="button" class="app-nav-tab" onclick="navigateToModule('index_options.html#option-selling-income-card')">💰 ₹5L Selling</button><button type="button" class="app-nav-tab" onclick="navigateToModule('index_options.html#portfolio-otm-hedge-card')">🛡️ OTM Hedge</button><button type="button" class="app-nav-tab" onclick="navigateToModule('index_mock.html')">🧪 Mock</button><button type="button" class="app-nav-tab" id="nav-tab-admin" onclick="navigateToModule('index_admin.html')">⚙️ Admin</button>
       </div>
     </div>
 
@@ -967,6 +967,8 @@
       <button type="button" class="icon-refresh-btn" id="btn-sync-now" onclick="syncOptionsMarketData(true)" title="Refresh OHLC &amp; Expiries">↻</button>
       <button type="button" class="btn-primary" onclick="toggleDhanDrawer()">🛡️ DhanHQ API &amp; Worker</button>
       <button type="button" class="btn-purple" onclick="openOverrideSpotModal()">✏️ Override Spot / VIX</button>
+      <button type="button" id="btn-jump-seller-income" class="btn-primary" onclick="jumpToOptionsSection('option-selling-income-card')">💰 ₹5L Option Selling</button>
+      <button type="button" id="btn-jump-otm-hedge" class="btn-emerald" onclick="jumpToOptionsSection('portfolio-otm-hedge-card')">🛡️ OTM Put Insurance</button>
     </div>
   </div>
 
@@ -1033,14 +1035,14 @@
 
   <!-- NAVIGATION TABS -->
   <div class="nav-tabs">
-    <button type="button" class="tab-btn active" id="tabbtn-scanner" onclick="switchOptionsTab('scanner')">📈 1. GainzAlgo V2 Alpha Scanner &amp; 5m OHLC</button>
-    <button type="button" class="tab-btn" id="tabbtn-chain" onclick="switchOptionsTab('chain')">⛓️ 2. Live Option Chain, Greeks &amp; Payoff Simulator</button>
+    <button type="button" class="tab-btn active" id="tabbtn-chain" onclick="switchOptionsTab('chain')">⛓️ 1. Option Chain, ₹5L Selling, OTM Hedge &amp; Payoff</button>
+    <button type="button" class="tab-btn" id="tabbtn-scanner" onclick="switchOptionsTab('scanner')">📈 2. GainzAlgo V2 Alpha Scanner &amp; 5m OHLC</button>
     <button type="button" class="tab-btn" id="tabbtn-pine" onclick="switchOptionsTab('pine')">📜 3. GainzAlgo Webhook JSON &amp; Pine Script v5</button>
     <button type="button" class="tab-btn" id="tabbtn-exec" onclick="switchOptionsTab('exec')">🚀 4. DhanHQ v2 F&amp;O Super Order &amp; API Execution</button>
   </div>
 
   <!-- ==================== TAB 1: GAINZALGO V2 ALPHA SCANNER ==================== -->
-  <div id="view-scanner" class="opt-tab-view">
+  <div id="view-scanner" class="opt-tab-view" style="display:none;">
     <div>
 
       <!-- Right: GainzAlgo Parameters + Strict RSI(14) Filter + Action Ticket -->
@@ -1130,7 +1132,7 @@
   </div>
 
   <!-- ==================== TAB 2: OPTION CHAIN & PAYOFF ==================== -->
-  <div id="view-chain" class="opt-tab-view" style="display:none;">
+  <div id="view-chain" class="opt-tab-view">
     <div class="card">
       <div class="card-title">
         <span>⛓️ Real-Time Option Chain &amp; Black-Scholes Greeks (Calls CE vs Puts PE)</span>
@@ -4718,6 +4720,222 @@
      BLACK-SCHOLES OPTION PRICING & STATUTORY CHARGES
      ========================================================================= */
 
+
+  // ============================================================================
+  // 💰 LOW-RISK DEFINED-RISK OPTION SELLING ENGINE (₹5L THETA INCOME DESK)
+  // ============================================================================
+  let lastTopSellerPlan = null;
+
+  function pickSellerExpiry(spec, targetDte) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    const targetDay = spec.exchange === "BSE" ? 4 : 2; // Tue NSE, Thu BSE
+    const candidates = [];
+
+    for (let dOff = 2; dOff <= 45; dOff++) {
+      const d = new Date(today.getTime() + dOff * 86400000);
+      if (d.getDay() === targetDay) {
+        if (targetDte >= 22) {
+          // Only pick last targetDay of month for Monthly
+          const nextWeek = new Date(d.getTime() + 7 * 86400000);
+          if (nextWeek.getMonth() === d.getMonth()) continue;
+        }
+        if (dOff >= Math.max(4, targetDte - 3)) {
+          const dd = String(d.getDate()).padStart(2, "0");
+          const mmm = months[d.getMonth()];
+          const yy = String(d.getFullYear()).slice(-2);
+          candidates.push({ label: `${dd} ${mmm} ${d.getFullYear()}`, compact: `${dd}${mmm}${yy}`, dte: dOff });
+          break;
+        }
+      }
+    }
+    return candidates[0] || { label: `Weekly (+${targetDte} DTE)`, compact: "WEEKLY", dte: targetDte };
+  }
+
+  function renderOptionSellingIncomeEngine() {
+    const gridEl = document.getElementById("seller-recommendations-grid");
+    if (!gridEl) return;
+
+    const capital = Math.max(100000, parseFloat(document.getElementById("inp-seller-capital")?.value) || 500000);
+    const deployPct = parseFloat(document.getElementById("sel-seller-deploy")?.value) || 0.50;
+    const style = document.getElementById("sel-seller-strategy")?.value || "IRON_CONDOR";
+    const wingPts = parseInt(document.getElementById("sel-seller-wing")?.value, 10) || 200;
+    const targetDte = parseInt(document.getElementById("sel-seller-expiry")?.value, 10) || 7;
+
+    // Default to NIFTY if an illiquid stock is active, since index spreads have tightest bid-ask & cash settlement
+    const uKey = (activeUnderlying === "BANKNIFTY" || activeUnderlying === "SENSEX" || activeUnderlying === "NIFTY") ? activeUnderlying : "NIFTY";
+    const spec = UNDERLYING_SPECS[uKey] || UNDERLYING_SPECS.NIFTY;
+    const spotObj = liveSpotMap[uKey];
+    const spot = (spotObj && spotObj.ltp > 0) ? spotObj.ltp : (OPTIONS_DEFAULT_BASE_SPOTS[uKey] || 24148.20);
+    const vix = (liveSpotMap.INDIAVIX && liveSpotMap.INDIAVIX.ltp > 0) ? liveSpotMap.INDIAVIX.ltp : 14.5;
+
+    const expInfo = pickSellerExpiry(spec, targetDte);
+    const usableMargin = capital * deployPct;
+    const cashBuffer = capital - usableMargin;
+
+    // Scale wing width cleanly for BANKNIFTY/SENSEX
+    const scaledWing = uKey === "NIFTY" ? wingPts : Math.round((wingPts * (spot / 24500)) / spec.step) * spec.step;
+    // Approximate defined-risk NSE spread margin per lot: ~1.35 * (wing * lot) + 12000 buffer (min 28000)
+    const estMarginPerLot = Math.max(28000, Math.round(scaledWing * spec.lot * 1.45 + 12000));
+    const maxSafeLots = Math.max(1, Math.floor(usableMargin / estMarginPerLot));
+
+    const profiles = [
+      {
+        id: "ULTRA_SAFE",
+        title: "🛡️ Ultra-Safe High-Probability (~84% POP)",
+        otmDist: 0.028, // ~16 Delta
+        badge: "Best for Full-Time Job",
+        border: "#059669",
+        lots: Math.max(1, Math.min(maxSafeLots, Math.round(maxSafeLots * 0.8))),
+        pop: "82%–86%"
+      },
+      {
+        id: "BALANCED_INCOME",
+        title: "⚖️ Balanced Weekly Theta (~76% POP)",
+        otmDist: 0.020, // ~22 Delta
+        badge: "Higher Daily Theta",
+        border: "#0284c7",
+        lots: maxSafeLots,
+        pop: "74%–78%"
+      }
+    ];
+
+    const computed = profiles.map(p => {
+      const totalQty = p.lots * spec.lot;
+      const legs = [];
+      let netCreditPerUnit = 0;
+      let netThetaPerUnit = 0;
+
+      if (style === "IRON_CONDOR" || style === "BULL_PUT") {
+        const shortPe = Math.round((spot * (1 - p.otmDist)) / spec.step) * spec.step;
+        const longPe = shortPe - scaledWing;
+        const gShortPe = calcOptionGreeks(spot, shortPe, expInfo.dte, vix + 1.2, "PE");
+        const gLongPe = calcOptionGreeks(spot, longPe, expInfo.dte, vix + 2.0, "PE");
+        legs.push({ strike: shortPe, optType: "PE", side: "SELL", prem: gShortPe.ltp, lots: p.lots, theta: gShortPe.theta });
+        legs.push({ strike: longPe, optType: "PE", side: "BUY", prem: gLongPe.ltp, lots: p.lots, theta: gLongPe.theta });
+        netCreditPerUnit += (gShortPe.ltp - gLongPe.ltp);
+        netThetaPerUnit += ((-gShortPe.theta) + gLongPe.theta); // selling positive theta
+      }
+      if (style === "IRON_CONDOR" || style === "BEAR_CALL") {
+        const shortCe = Math.round((spot * (1 + p.otmDist)) / spec.step) * spec.step;
+        const longCe = shortCe + scaledWing;
+        const gShortCe = calcOptionGreeks(spot, shortCe, expInfo.dte, vix, "CE");
+        const gLongCe = calcOptionGreeks(spot, longCe, expInfo.dte, vix + 0.5, "CE");
+        legs.push({ strike: shortCe, optType: "CE", side: "SELL", prem: gShortCe.ltp, lots: p.lots, theta: gShortCe.theta });
+        legs.push({ strike: longCe, optType: "CE", side: "BUY", prem: gLongCe.ltp, lots: p.lots, theta: gLongCe.theta });
+        netCreditPerUnit += (gShortCe.ltp - gLongCe.ltp);
+        netThetaPerUnit += ((-gShortCe.theta) + gLongCe.theta);
+      }
+
+      netCreditPerUnit = Math.max(4, +netCreditPerUnit.toFixed(2));
+      const marginReq = p.lots * estMarginPerLot;
+      const grossCredit = Math.round(netCreditPerUnit * totalQty);
+      const charges = calcFnoStatutoryCharges(
+        legs.filter(l => l.side === "BUY").reduce((s, l) => s + l.prem, 0),
+        legs.filter(l => l.side === "SELL").reduce((s, l) => s + l.prem, 0),
+        totalQty,
+        legs.length
+      ).total;
+      const maxProfitNet = Math.max(0, grossCredit - charges);
+      const maxLossCapped = Math.max(0, Math.round((scaledWing - netCreditPerUnit) * totalQty) + charges);
+      const estDailyTheta = Math.max(150, Math.round(Math.abs(netThetaPerUnit) * totalQty));
+      const roiCyclePct = ((maxProfitNet / capital) * 100).toFixed(2);
+      const slTriggerCredit = +(netCreditPerUnit * 2.0).toFixed(1);
+      const tpTriggerCredit = +(netCreditPerUnit * 0.40).toFixed(1);
+
+      return { ...p, uKey, spot, expInfo, legs, netCreditPerUnit, marginReq, maxProfitNet, maxLossCapped, estDailyTheta, roiCyclePct, slTriggerCredit, tpTriggerCredit, scaledWing, totalQty };
+    });
+
+    lastTopSellerPlan = computed[0];
+    window._computedSellerPlans = computed;
+
+    const mBadge = document.getElementById("seller-margin-badge");
+    if (mBadge) {
+      mBadge.textContent = `Deploy ₹${(usableMargin / 100000).toFixed(2)}L · Cash Buffer ₹${(cashBuffer / 100000).toFixed(2)}L`;
+    }
+
+    gridEl.innerHTML = computed.map((c, idx) => `
+      <div style="border:2px solid ${c.border}; border-radius:10px; padding:11px 12px; background:var(--bg-card, #ffffff); display:flex; flex-direction:column; justify-content:space-between; gap:8px;">
+        <div>
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:6px; margin-bottom:6px;">
+            <strong style="font-size:0.8rem; color:var(--text-main);">${c.title}</strong>
+            <span class="badge ${idx === 0 ? 'badge-emerald' : 'badge-blue'}">${c.badge}</span>
+          </div>
+          <div style="font-size:0.78rem; font-weight:700; color:${c.border}; margin-bottom:6px;">
+            ${c.uKey} (${c.lots} Lot${c.lots > 1 ? 's' : ''} = ${c.totalQty} Qty) · ${c.expInfo.label} (${c.expInfo.dte} DTE)
+          </div>
+          <div style="font-size:0.72rem; background:var(--bg-card-alt, #f8fafc); border-radius:8px; padding:7px 9px; margin-bottom:7px; line-height:1.5;">
+            ${c.legs.map(l => `<div><span class="badge ${l.side === 'SELL' ? 'badge-red' : 'badge-emerald'}" style="padding:1px 5px; font-size:0.65rem;">${l.side}</span> <strong>${l.strike} ${l.optType}</strong> @ ₹${l.prem.toFixed(1)}</div>`).join("")}
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:5px; font-size:0.72rem;">
+            <div>Margin Used: <strong>₹${c.marginReq.toLocaleString("en-IN")}</strong></div>
+            <div>Win Prob (POP): <strong>${c.pop}</strong></div>
+            <div>Max Net Profit: <strong style="color:var(--emerald);">+₹${c.maxProfitNet.toLocaleString("en-IN")} (${c.roiCyclePct}%)</strong></div>
+            <div>Capped Max Loss: <strong style="color:var(--red);">-₹${c.maxLossCapped.toLocaleString("en-IN")}</strong></div>
+            <div>Est. Daily Theta: <strong>+₹${c.estDailyTheta.toLocaleString("en-IN")}/day</strong></div>
+            <div>Auto Exit Rule: <strong>TP 60% / SL 2x</strong></div>
+          </div>
+        </div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; padding-top:4px; border-top:1px dashed var(--border, #e2e8f0);">
+          <button type="button" class="btn-primary" style="flex:1; padding:4px 8px; font-size:0.71rem;" onclick="loadSellerPlanIntoSimulator(${idx})">📐 Simulate Payoff</button>
+          <button type="button" class="btn-emerald" style="flex:1; padding:4px 8px; font-size:0.71rem;" onclick="loadSellerPlanIntoDhan(${idx})">🚀 Stage Sell Leg</button>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  function loadSellerPlanIntoSimulator(idx) {
+    const plans = window._computedSellerPlans || [];
+    const p = plans[idx];
+    if (!p) return;
+    if (typeof strategyLegs !== "undefined") {
+      strategyLegs = p.legs.map(l => ({ strike: l.strike, optType: l.optType, side: l.side, prem: l.prem, lots: l.lots }));
+      if (typeof renderStrategyLegs === "function") renderStrategyLegs();
+      if (typeof renderStrategyPayoff === "function") renderStrategyPayoff();
+    }
+    const toast = document.getElementById("seller-action-toast");
+    if (toast) {
+      toast.innerHTML = `<span style="color:var(--emerald); font-weight:700;">📐 Loaded ${p.uKey} ${p.legs.length}-leg Defined-Risk Spread (${p.lots} lots) into Strategy Payoff Simulator below!</span>`;
+    }
+  }
+
+  function loadSellerPlanIntoDhan(idx) {
+    const plans = window._computedSellerPlans || [];
+    const p = plans[idx];
+    if (!p) return;
+    const shortLeg = p.legs.find(l => l.side === "SELL") || p.legs[0];
+    const symEl = document.getElementById("exec-contract-sym");
+    const sideEl = document.getElementById("exec-side");
+    const prodEl = document.getElementById("exec-product");
+    const qtyEl = document.getElementById("exec-qty");
+    const priceEl = document.getElementById("exec-price");
+    if (symEl) symEl.value = `${p.uKey} ${p.expInfo.compact} ${shortLeg.strike} ${shortLeg.optType}`;
+    if (sideEl) sideEl.value = "SELL";
+    if (prodEl) prodEl.value = "MARGIN";
+    if (qtyEl) qtyEl.value = p.totalQty;
+    if (priceEl) priceEl.value = shortLeg.prem.toFixed(1);
+    if (typeof refreshDhanExecPayloads === "function") refreshDhanExecPayloads();
+
+    const toast = document.getElementById("seller-action-toast");
+    if (toast) {
+      toast.innerHTML = `<span style="color:var(--amber); font-weight:700;">🚀 Staged Short Leg (${shortLeg.strike} ${shortLeg.optType}). Important: Always execute your protective BUY wing(s) FIRST in DhanHQ to get the 65% margin benefit!</span>`;
+    }
+  }
+
+  async function pushTopSellerSetupToPhone() {
+    const p = lastTopSellerPlan;
+    const toast = document.getElementById("seller-action-toast");
+    if (!p) return;
+    const legStr = p.legs.map(l => `${l.side} ${l.strike}${l.optType}@${l.prem.toFixed(0)}`).join(" | ");
+    const msg = `💰 PIAI Low-Risk Option Selling (${p.uKey} ${p.expInfo.label}, ${p.lots} lots): ${legStr}. Max Profit: +₹${p.maxProfitNet.toLocaleString("en-IN")} | Capped Loss: -₹${p.maxLossCapped.toLocaleString("en-IN")} | Est Theta: +₹${p.estDailyTheta}/day.`;
+    const bOk = typeof triggerNativeBrowserPushNotification === "function" ? triggerNativeBrowserPushNotification("💰 PIAI Option Selling Setup", msg) : false;
+    const nOk = typeof sendInstantNtfyPushNotification === "function" ? await sendInstantNtfyPushNotification(msg, "PIAI Option Selling Setup", true) : false;
+    if (toast) {
+      toast.innerHTML = `<span style="color:${(bOk || nOk) ? 'var(--emerald)' : 'var(--amber)'}; font-weight:700;">${(bOk || nOk) ? '📲 Sent Defined-Risk Option Selling setup to your device!' : 'ℹ️ Set your ntfy.sh Topic in Admin Alerts to push setups to your phone.'}</span>`;
+    }
+  }
+
   // ============================================================================
   // 🛡️ PORTFOLIO LOSS-INSURANCE HEDGE ENGINE (1+ MONTH OTM PUT SELECTOR)
   // ============================================================================
@@ -6045,6 +6263,17 @@ print("Dhan F&O Order Response:", res)`;
     recomputeAllOptionModels();
   }
 
+
+  function jumpToOptionsSection(sectionId) {
+    if (typeof switchOptionsTab === "function") switchOptionsTab("chain");
+    if (typeof renderOptionSellingIncomeEngine === "function") renderOptionSellingIncomeEngine();
+    if (typeof renderOtmHedgeEngine === "function") renderOtmHedgeEngine();
+    setTimeout(() => {
+      const el = document.getElementById(sectionId);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
+  }
+
   function switchOptionsTab(tabId) {
     document.querySelectorAll(".opt-tab-view").forEach(el => el.style.display = "none");
     const target = document.getElementById("view-" + tabId);
@@ -6153,6 +6382,10 @@ print("Dhan F&O Order Response:", res)`;
         if (autoSyncRem <= 0 && !isSyncing) {
           autoSyncRem = autoSyncSec;
           if (typeof syncPortfolioValueToHedgeEngine === 'function') syncPortfolioValueToHedgeEngine(false);
+      if (typeof renderOptionSellingIncomeEngine === 'function') renderOptionSellingIncomeEngine();
+      if (window.location.hash && /^#(option-selling-income-card|portfolio-otm-hedge-card)$/.test(window.location.hash)) {
+        jumpToOptionsSection(window.location.hash.slice(1));
+      }
       syncOptionsMarketData(false);
         }
       }
